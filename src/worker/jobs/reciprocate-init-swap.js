@@ -1,6 +1,9 @@
 const debug = require('debug')('liquality:agent:worker:reciprocate-init-swap')
 
+const config = require('../../config')
+const Check = require('../../models/Check')
 const Order = require('../../models/Order')
+const { RescheduleError } = require('../../utils/errors')
 
 module.exports = async job => {
   const { agenda } = job
@@ -28,6 +31,26 @@ module.exports = async job => {
     })
 
     return agenda.now('find-refund-tx', { orderId: order.orderId, fromLastScannedBlock: fromCurrentBlockNumber })
+  }
+
+  if (
+    order.fromAmountUsd > 0 &&
+    order.fromAmountUsd < config.threshold.manualAboveFromAmountUsd) {
+    debug(`Auto-approving order ${data.orderId} worth $${order.fromAmountUsd}`)
+  } else {
+    const check = await Check.getCheckForOrder(data.orderId)
+    const flag = check.get('flags.reciprocate-init-swap') || {}
+
+    if (flag.reject) {
+      debug(`Rejected ${data.orderId}`, flag.message)
+      return
+    }
+
+    if (!flag.approve) {
+      throw new RescheduleError(`Reschedule ${data.orderId}: reciprocate-init-swap is not approved yet`, order.from)
+    }
+
+    debug(`Approved ${data.orderId}`, flag.message)
   }
 
   const toLastScannedBlock = await toClient.chain.getBlockHeight()
